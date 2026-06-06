@@ -7,9 +7,9 @@ import edge_tts
 import requests
 from dotenv import load_dotenv
 
-from modules.wikimedia_downloader import download_wikimedia_images
 from modules.subtitle_generator import generate_srt_from_script
 from modules.wiki_summary import build_script_from_wikipedia
+from modules.wikimedia_downloader import download_wikimedia_images
 
 load_dotenv()
 
@@ -77,7 +77,7 @@ def download_pexels_images(query: str, count: int):
     params = {
         "query": query,
         "per_page": count,
-        "orientation": "portrait"
+        "orientation": "portrait",
     }
 
     try:
@@ -123,7 +123,7 @@ def get_images_for_topic(topic: str, count: int):
     wikimedia_images = download_wikimedia_images(
         topic=topic,
         output_dir=str(IMAGES_DIR),
-        max_images=count
+        max_images=count,
     )
 
     if len(wikimedia_images) >= count:
@@ -166,15 +166,21 @@ def create_video_from_images(image_paths, audio_path, subtitle_path):
         f.write(f"file '{last_image_path}'\n")
 
     cmd_video = [
-        FFMPEG_PATH, "-y",
-        "-f", "concat",
-        "-safe", "0",
-        "-i", str(list_file),
+        FFMPEG_PATH,
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(list_file),
         "-vf",
         "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
-        "-r", "30",
-        "-pix_fmt", "yuv420p",
-        str(temp_video)
+        "-r",
+        "30",
+        "-pix_fmt",
+        "yuv420p",
+        str(temp_video),
     ]
 
     subprocess.run(cmd_video, check=True)
@@ -182,20 +188,27 @@ def create_video_from_images(image_paths, audio_path, subtitle_path):
     print("[5/6] Ses video ile birleştiriliyor...")
 
     cmd_audio = [
-        FFMPEG_PATH, "-y",
-        "-i", str(temp_video),
-        "-i", str(audio_path),
-        "-c:v", "copy",
-        "-c:a", "aac",
+        FFMPEG_PATH,
+        "-y",
+        "-i",
+        str(temp_video),
+        "-i",
+        str(audio_path),
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
         "-shortest",
-        str(final_video)
+        str(final_video),
     ]
 
     subprocess.run(cmd_audio, check=True)
 
     print("[6/6] Altyazı videoya gömülüyor...")
 
-    subtitle_path_fixed = str(Path(subtitle_path).resolve()).replace("\\", "/").replace(":", "\\:")
+    subtitle_path_fixed = (
+        str(Path(subtitle_path).resolve()).replace("\\", "/").replace(":", "\\:")
+    )
 
     subtitle_filter = (
         f"subtitles='{subtitle_path_fixed}':"
@@ -213,11 +226,15 @@ def create_video_from_images(image_paths, audio_path, subtitle_path):
     )
 
     cmd_subtitle = [
-        FFMPEG_PATH, "-y",
-        "-i", str(final_video),
-        "-vf", subtitle_filter,
-        "-c:a", "copy",
-        str(final_subtitled)
+        FFMPEG_PATH,
+        "-y",
+        "-i",
+        str(final_video),
+        "-vf",
+        subtitle_filter,
+        "-c:a",
+        "copy",
+        str(final_subtitled),
     ]
 
     subprocess.run(cmd_subtitle, check=True)
@@ -243,21 +260,29 @@ async def main():
     script_path.write_text(script.strip(), encoding="utf-8")
 
     print("Senaryo hazır.")
+    print(f"Düzenlemek istersen aç: {script_path}")
+    input("Script düzenlemeyi bitirip kaydettikten sonra Enter'a bas...")
+
+    script = script_path.read_text(encoding="utf-8").strip()
 
     audio_path = await create_voice(script)
 
     subtitle_file = generate_srt_from_script(
         script,
         str(audio_path),
-        str(OUTPUT_DIR)
+        str(OUTPUT_DIR),
     )
+
+    print("\nAltyazı dosyası oluşturuldu.")
+    print(f"Düzenlemek istersen aç: {subtitle_file}")
+    input("Altyazı düzenlemeyi bitirip kaydettikten sonra Enter'a bas...")
 
     image_paths = get_images_for_topic(topic, count=IMAGE_COUNT)
 
     create_video_from_images(
         image_paths,
         audio_path,
-        subtitle_file
+        subtitle_file,
     )
 
     print(f"Altyazı oluşturuldu: {subtitle_file}")

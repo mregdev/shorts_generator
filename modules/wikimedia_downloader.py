@@ -1,4 +1,5 @@
 import io
+import os
 import requests
 from pathlib import Path
 from PIL import Image
@@ -10,116 +11,20 @@ HEADERS = {
 }
 
 
-def wikipedia_search_title(topic: str, lang: str = "tr") -> str | None:
-    url = f"https://{lang}.wikipedia.org/w/api.php"
-
-    params = {
-        "action": "query",
-        "list": "search",
-        "srsearch": topic,
-        "srlimit": 1,
-        "format": "json"
-    }
-
-    try:
-        r = requests.get(url, params=params, headers=HEADERS, timeout=20)
-        r.raise_for_status()
-
-        results = r.json().get("query", {}).get("search", [])
-
-        if results:
-            return results[0]["title"]
-
-    except Exception as e:
-        print(f"[Wikipedia] Başlık arama hatası: {e}")
-
-    return None
-
-
-def get_english_title_from_tr(title: str) -> str | None:
-    url = "https://tr.wikipedia.org/w/api.php"
-
-    params = {
-        "action": "query",
-        "prop": "langlinks",
-        "titles": title,
-        "lllang": "en",
-        "format": "json"
-    }
-
-    try:
-        r = requests.get(url, params=params, headers=HEADERS, timeout=20)
-        r.raise_for_status()
-
-        pages = r.json().get("query", {}).get("pages", {})
-
-        for page in pages.values():
-            langlinks = page.get("langlinks", [])
-
-            if langlinks:
-                return langlinks[0]["*"]
-
-    except Exception as e:
-        print(f"[Wikipedia] İngilizce başlık hatası: {e}")
-
-    return None
-
-
-def build_search_queries(topic: str) -> list[str]:
-    queries = []
-
-    clean_topic = topic.strip()
-    queries.append(clean_topic)
-
-    print("[Arama] Wikipedia başlığı aranıyor...")
-
-    tr_title = wikipedia_search_title(clean_topic, lang="tr")
-
-    if tr_title:
-        print(f"[Arama] Türkçe başlık bulundu: {tr_title}")
-        queries.append(tr_title)
-
-        en_title = get_english_title_from_tr(tr_title)
-
-        if en_title:
-            print(f"[Arama] İngilizce başlık bulundu: {en_title}")
-            queries.append(en_title)
-
-            queries.extend([
-                f"{en_title} painting",
-                f"{en_title} illustration",
-                f"{en_title} historical",
-                f"{en_title} map",
-            ])
-
-    en_search_title = wikipedia_search_title(clean_topic, lang="en")
-
-    if en_search_title:
-        print(f"[Arama] İngilizce arama sonucu: {en_search_title}")
-        queries.append(en_search_title)
-
-    return list(dict.fromkeys([q for q in queries if q]))
-
-
-def search_commons(query: str, limit: int = 10) -> list[dict]:
+def search_commons(query: str, limit: int = 20, offset: int = 0) -> list[dict]:
     params = {
         "action": "query",
         "generator": "search",
         "gsrsearch": query,
         "gsrnamespace": 6,
         "gsrlimit": limit,
+        "gsroffset": offset,
         "prop": "imageinfo",
         "iiprop": "url|mime",
         "format": "json"
     }
 
-    response = requests.get(
-        COMMONS_API_URL,
-        params=params,
-        headers=HEADERS,
-        timeout=20
-    )
-
+    response = requests.get(COMMONS_API_URL, params=params, headers=HEADERS, timeout=20)
     response.raise_for_status()
 
     pages = response.json().get("query", {}).get("pages", {})
@@ -137,23 +42,36 @@ def save_as_jpg(image_bytes: bytes, file_path: Path):
 
 def should_skip_title(title: str) -> bool:
     bad_words = [
-        "logo",
-        "icon",
-        "stamp",
-        "coin",
-        "wax",
-        "signature",
-        "seal",
-        "grave",
-        "tomb"
+        "logo", "icon", "stamp", "coin", "signature",
+        "seal", "grave", "tomb"
     ]
 
     lower = title.lower()
     return any(word in lower for word in bad_words)
 
 
+def download_image_to_jpg(url: str, file_path: Path):
+    img = requests.get(url, headers=HEADERS, timeout=30)
+    img.raise_for_status()
+    save_as_jpg(img.content, file_path)
+
+
+def ask_yes_no(prompt: str) -> bool:
+    while True:
+        answer = input(prompt).strip().lower()
+
+        if answer in ["y", "yes", "e", "evet"]:
+            return True
+
+        if answer in ["n", "no", "h", "hayır", "hayir"]:
+            return False
+
+        print("Lütfen Y veya N yaz.")
+
+
 def download_wikimedia_images(topic: str, output_dir: str, max_images: int = 6) -> list[Path]:
-    print("[Wikimedia] Görsel arama başlatıldı...")
+    print("[Wikimedia] Manuel onaylı görsel seçimi başlatıldı.")
+    print(f"[Wikimedia] Arama konusu: {topic}")
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -162,23 +80,23 @@ def download_wikimedia_images(topic: str, output_dir: str, max_images: int = 6) 
     seen_urls = set()
     used_titles = set()
 
-    queries = build_search_queries(topic)
+    offset = 0
+    batch_size = 20
 
-    print("[Wikimedia] Denenecek aramalar:")
-    for q in queries:
-        print(f"  - {q}")
-
-    for query in queries:
-        if len(downloaded) >= max_images:
-            break
-
-        print(f"[Wikimedia] Aranıyor: {query}")
+    while len(downloaded) < max_images:
+        print(f"[Wikimedia] Yeni adaylar aranıyor... offset={offset}")
 
         try:
-            results = search_commons(query, limit=15)
+            results = search_commons(topic, limit=batch_size, offset=offset)
         except Exception as e:
-            print(f"[Wikimedia] Arama hatası: {e}")
-            continue
+            raise Exception(f"Wikimedia arama hatası: {e}")
+
+        if not results:
+            raise Exception(
+                f"Yeterli görsel bulunamadı. Onaylanan: {len(downloaded)}/{max_images}"
+            )
+
+        offset += batch_size
 
         for item in results:
             if len(downloaded) >= max_images:
@@ -186,14 +104,10 @@ def download_wikimedia_images(topic: str, output_dir: str, max_images: int = 6) 
 
             title = item.get("title", "")
 
-            if should_skip_title(title):
-                continue
-
-            if title in used_titles:
+            if not title or should_skip_title(title) or title in used_titles:
                 continue
 
             imageinfo = item.get("imageinfo", [])
-
             if not imageinfo:
                 continue
 
@@ -211,23 +125,45 @@ def download_wikimedia_images(topic: str, output_dir: str, max_images: int = 6) 
                 continue
 
             seen_urls.add(url)
-            used_titles.add(title)
+
+            preview_path = output_path / "candidate_preview.jpg"
 
             try:
-                img = requests.get(url, headers=HEADERS, timeout=30)
-                img.raise_for_status()
-
-                file_name = f"wikimedia_{len(downloaded) + 1}.jpg"
-                file_path = output_path / file_name
-
-                save_as_jpg(img.content, file_path)
-
-                downloaded.append(file_path)
-
-                print(f"[Wikimedia] İndirildi: {file_path.name} | {title}")
-
+                download_image_to_jpg(url, preview_path)
             except Exception as e:
-                print(f"[Wikimedia] İndirme/dönüştürme hatası: {e}")
+                print(f"[Wikimedia] Aday indirilemedi: {e}")
+                continue
 
-    print(f"[Wikimedia] Toplam indirilen: {len(downloaded)}")
+            print("\n----------------------------------------")
+            print(f"Aday görsel: {title}")
+            print(f"Dosya: {preview_path}")
+            print("----------------------------------------")
+
+            try:
+                os.startfile(preview_path)
+            except Exception:
+                pass
+
+            accepted = ask_yes_no("Bu resmi onaylıyor musun? (Y/N): ")
+
+            if accepted:
+                final_path = output_path / f"wikimedia_{len(downloaded) + 1}.jpg"
+
+                if final_path.exists():
+                    final_path.unlink()
+
+                preview_path.rename(final_path)
+
+                downloaded.append(final_path)
+                used_titles.add(title)
+
+                print(f"[Wikimedia] Onaylandı: {final_path.name} | {title}")
+                print(f"[Wikimedia] Toplam onaylı: {len(downloaded)}/{max_images}")
+            else:
+                if preview_path.exists():
+                    preview_path.unlink()
+
+                print("[Wikimedia] Reddedildi, yeni aday aranacak.")
+
+    print(f"[Wikimedia] Seçim tamamlandı. Toplam: {len(downloaded)}")
     return downloaded
